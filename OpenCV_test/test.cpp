@@ -125,6 +125,9 @@ int main(int argc, char*argv[])
 	
 	setMouseCallback("video", mouseRectHandler, NULL);
 
+
+
+
 	//画感兴趣区域   
 	for (;;)
 	{
