@@ -145,6 +145,11 @@ int main(int argc, char*argv[])
 	//remove callback    
 	setMouseCallback("video", NULL, NULL);
 
+
+
+
+
+
 	namedWindow("video_select", 1);
 	//视频继续    
 	for (;;)
