@@ -107,21 +107,30 @@ void mouseRectHandler(int event, int x, int y, int flags, void *param)
 	}
 }
 
+Mat frame, GrayImage, frameCanny;
+int threshold_temp;
+
+void on_trackbar(int threshold)
+{
+	threshold_temp = threshold;
+	//canny边缘检测  
+	
+}
+
 int main(int argc, char*argv[])
 {
 	//读取视频    
 	VideoCapture video(0);
-
+	
 	//判断视频是否打开    
 	if (!video.isOpened())
 		return 0;
 
-	//视频帧    
-	Mat frame, frameDown, frameUp;
-
 	namedWindow("video", 0);
-	namedWindow("videoDownSample", 1);
-	namedWindow("videoUpSample", 1);
+	namedWindow("videoCanny", 1);
+	int nThresholdEdge = 0;//初始值
+	cvCreateTrackbar("Threshold", "videoCanny", &nThresholdEdge, 255, on_trackbar);
+
 	//视频继续    
 	for (;;)
 	{
@@ -130,12 +139,14 @@ int main(int argc, char*argv[])
 		//判断是否有当前帧  
 		if (!frame.data)
 			break;
+		cvtColor(frame, GrayImage, CV_BGR2GRAY);
+
 		
-		pyrDown(frame, frameDown, Size(frame.cols*0.5, frame.rows*0.5));
-		pyrUp(frame, frameUp, Size(frame.cols*2, frame.rows*2));
+		
+		Canny(GrayImage, frameCanny, threshold_temp, threshold_temp * 3, 3);
+		on_trackbar(threshold_temp);
 		imshow("video", frame);
-		imshow("videoDownSample", frameDown);
-		imshow("videoUpSample", frameUp);
+		imshow("videoCanny", frameCanny);
 		if (waitKey(33) == 'q')
 			break;
 	}
