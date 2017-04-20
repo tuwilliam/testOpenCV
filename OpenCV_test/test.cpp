@@ -117,10 +117,11 @@ int main(int argc, char*argv[])
 		return 0;
 
 	//视频帧    
-	Mat frame,frameGaussian;
+	Mat frame, frameDown, frameUp;
 
-	namedWindow("video", 1);
-	namedWindow("video_Gaussian", 1);
+	namedWindow("video", 0);
+	namedWindow("videoDownSample", 1);
+	namedWindow("videoUpSample", 1);
 	//视频继续    
 	for (;;)
 	{
@@ -129,11 +130,12 @@ int main(int argc, char*argv[])
 		//判断是否有当前帧  
 		if (!frame.data)
 			break;
-		GaussianBlur(frame, frameGaussian, Size(5, 5), 2, 1);
-
+		
+		pyrDown(frame, frameDown, Size(frame.cols*0.5, frame.rows*0.5));
+		pyrUp(frame, frameUp, Size(frame.cols*2, frame.rows*2));
 		imshow("video", frame);
-		imshow("video_Gaussian", frameGaussian);
-
+		imshow("videoDownSample", frameDown);
+		imshow("videoUpSample", frameUp);
 		if (waitKey(33) == 'q')
 			break;
 	}
