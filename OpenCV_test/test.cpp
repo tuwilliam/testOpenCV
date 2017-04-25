@@ -1,234 +1,171 @@
-﻿#include "opencv2/objdetect.hpp"
-#include "opencv2/highgui.hpp"
-#include "opencv2/imgproc.hpp"
+﻿
+#include <opencv2/core/core.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/highgui/highgui.hpp>
 #include <iostream>
 
-using namespace std;
 using namespace cv;
+using namespace std;
 
-static void help()
+#define GRAY_THRESH 150
+//#define HOUGH_VOTE 50
+int HOUGH_VOTE = 50;
+//#define DEGREE 27
+
+int main(int argc, char **argv)
 {
-	cout << "\nThis program demonstrates the cascade recognizer. Now you can use Haar or LBP features.\n"
-		"This classifier can recognize many kinds of rigid objects, once the appropriate classifier is trained.\n"
-		"It's most known use is for faces.\n"
-		"Usage:\n"
-		"./facedetect [--cascade=<cascade_path> this is the primary trained classifier such as frontal face]\n"
-		"   [--nested-cascade[=nested_cascade_path this an optional secondary classifier such as eyes]]\n"
-		"   [--scale=<image scale greater or equal to 1, try 1.3 for example>]\n"
-		"   [--try-flip]\n"
-		"   [filename|camera_index]\n\n"
-		"see facedetect.cmd for one call:\n"
-		"./facedetect --cascade=\"../../data/haarcascades/haarcascade_frontalface_alt.xml\" --nested-cascade=\"../../data/haarcascades/haarcascade_eye_tree_eyeglasses.xml\" --scale=1.3\n\n"
-		"During execution:\n\tHit any key to quit.\n"
-		"\tUsing OpenCV version " << CV_VERSION << "\n" << endl;
-}
+	//Read a single-channel image
+	Mat srcImg = imread("5.jpg", CV_LOAD_IMAGE_GRAYSCALE);
+	/*pyrDown(srcImg, srcImg, Size(srcImg.cols/2, srcImg.rows / 2));
+	pyrDown(srcImg, srcImg, Size(srcImg.cols / 2, srcImg.rows / 2));
+	pyrDown(srcImg, srcImg, Size(srcImg.cols / 2, srcImg.rows / 2));*/
 
-void detectAndDraw(Mat& img, CascadeClassifier& cascade,
-	CascadeClassifier& nestedCascade,
-	double scale, bool tryflip);
-
-string cascadeName;
-string nestedCascadeName;
-Mat frame, image;
-vector<Rect> faces;
-Rect rectLast;
-bool detect = false;
-
-int main(int argc, const char** argv)
-{
-	VideoCapture capture;
-	
-	string inputName;
-	bool tryflip;
-	CascadeClassifier cascade, nestedCascade;
-	double scale;
-
-	cv::CommandLineParser parser(argc, argv,
-		"{help h||}"
-		"{cascade|haarcascade_frontalface_alt.xml|}"
-		"{nested-cascade|haarcascade_eye_tree_eyeglasses.xml|}"
-		"{scale|1|}{try-flip||}{@filename||}"
-		);
-	if (parser.has("help"))
-	{
-		help();
-		return 0;
-	}
-	cascadeName = parser.get<string>("cascade");
-	nestedCascadeName = parser.get<string>("nested-cascade");
-	scale = parser.get<double>("scale");
-	if (scale < 1)
-		scale = 1;
-	tryflip = parser.has("try-flip");
-	inputName = parser.get<string>("@filename");
-	if (!parser.check())
-	{
-		parser.printErrors();
-		return 0;
-	}
-	if (!nestedCascade.load(nestedCascadeName))
-		cerr << "WARNING: Could not load classifier cascade for nested objects" << endl;
-	if (!cascade.load(cascadeName))
-	{
-		cerr << "ERROR: Could not load classifier cascade" << endl;
-		help();
+	if (srcImg.empty())
 		return -1;
-	}
-	if (inputName.empty() || (isdigit(inputName[0]) && inputName.size() == 1))
+
+	imshow("source", srcImg);
+
+	Point center(srcImg.cols / 2, srcImg.rows / 2);
+
+	//Expand image to an optimal size, for faster processing speed
+	//Set widths of borders in four directions
+	//If borderType==BORDER_CONSTANT, fill the borders with (0,0,0)
+	/*
+	Various border types, image boundaries are denoted with '|'
+	* BORDER_REPLICATE:     aaaaaa|abcdefgh|hhhhhhh
+	* BORDER_REFLECT:       fedcba|abcdefgh|hgfedcb
+	* BORDER_REFLECT_101:   gfedcb|abcdefgh|gfedcba
+	* BORDER_WRAP:          cdefgh|abcdefgh|abcdefg
+	* BORDER_CONSTANT:      iiiiii|abcdefgh|iiiiiii  with some specified 'i'
+	*/
+
+	Mat padded;
+	int opWidth = getOptimalDFTSize(srcImg.rows);
+	int opHeight = getOptimalDFTSize(srcImg.cols);
+	copyMakeBorder(srcImg, padded, 0, opWidth - srcImg.rows, 0,
+		opHeight - srcImg.cols, BORDER_CONSTANT, Scalar::all(0));
+
+	Mat planes[] = { Mat_<float>(padded), Mat::zeros(padded.size(), CV_32F) };
+	Mat comImg;
+	//Merge into a double-channel image
+	merge(planes, 2, comImg);
+
+	//Use the same image as input and output,
+	//so that the results can fit in Mat well
+	dft(comImg, comImg);
+
+	//Compute the magnitude
+	//planes[0]=Re(DFT(I)), planes[1]=Im(DFT(I))
+	//magnitude=sqrt(Re^2+Im^2)
+	split(comImg, planes);
+	magnitude(planes[0], planes[1], planes[0]);
+
+	//Switch to logarithmic scale, for better visual results
+	//M2=log(1+M1)
+	Mat magMat = planes[0];
+	magMat += Scalar::all(1);
+	log(magMat, magMat);
+
+	//Crop the spectrum
+	//Width and height of magMat should be even, so that they can be divided by 2
+	//-2 is 11111110 in binary system, operator & make sure width and height are always even
+	magMat = magMat(Rect(0, 0, magMat.cols & -2, magMat.rows & -2));
+
+	//Rearrange the quadrants of Fourier image,
+	//so that the origin is at the center of image,
+	//and move the high frequency to the corners
+	int cx = magMat.cols / 2;
+	int cy = magMat.rows / 2;
+
+	Mat q0(magMat, Rect(0, 0, cx, cy));
+	Mat q1(magMat, Rect(0, cy, cx, cy));
+	Mat q2(magMat, Rect(cx, cy, cx, cy));
+	Mat q3(magMat, Rect(cx, 0, cx, cy));
+
+	Mat tmp;
+	q0.copyTo(tmp);
+	q2.copyTo(q0);
+	tmp.copyTo(q2);
+
+	q1.copyTo(tmp);
+	q3.copyTo(q1);
+	tmp.copyTo(q3);
+
+	//Normalize the magnitude to [0,1], then to[0,255]
+	normalize(magMat, magMat, 0, 1, CV_MINMAX);
+	Mat magImg(magMat.size(), CV_8UC1);
+	magMat.convertTo(magImg, CV_8UC1, 255, 0);
+	imshow("magnitude", magImg);
+
+	//Turn into binary image
+	threshold(magImg, magImg, GRAY_THRESH, 255, CV_THRESH_BINARY);
+	imshow("mag_binary", magImg);
+
+	//Find lines with Hough Transformation
+	vector<Vec2f> lines;
+	float pi180 = (float)CV_PI / 180;
+	Mat linImg(magImg.size(), CV_8UC3);
+	HoughLines(magImg, lines, 1, pi180, HOUGH_VOTE, 0, 0);
+	while (lines.size() > 3)
 	{
-		int camera = inputName.empty() ? 0 : inputName[0] - '0';
-		if (!capture.open(camera))
-			cout << "Capture from camera #" << camera << " didn't work" << endl;
+		HOUGH_VOTE += 10;
+		HoughLines(magImg, lines, 1, pi180, HOUGH_VOTE, 0, 0);
+	}
+		
+	int numLines = lines.size();
+	for (int l = 0; l<numLines; l++)
+	{
+		float rho = lines[l][0], theta = lines[l][1];
+		Point pt1, pt2;
+		double a = cos(theta), b = sin(theta);
+		double x0 = a*rho, y0 = b*rho;
+		pt1.x = cvRound(x0 + 1000 * (-b));
+		pt1.y = cvRound(y0 + 1000 * (a));
+		pt2.x = cvRound(x0 - 1000 * (-b));
+		pt2.y = cvRound(y0 - 1000 * (a));
+		line(linImg, pt1, pt2, Scalar(255, 0, 0), 1, 8, 0);
+	}
+	imshow("lines", linImg);
+	//imwrite("imageText_line.jpg",linImg);
+	if (lines.size() == 3) {
+		cout << "found three angels:" << endl;
+		cout << lines[0][1] * 180 / CV_PI << endl << lines[1][1] * 180 / CV_PI << endl << lines[2][1] * 180 / CV_PI << endl << endl;
 	}
 
-
-
-
-
-
-	if (capture.isOpened())
+	//Find the proper angel from the three found angels
+	float angel = 0;
+	float piThresh = (float)CV_PI / 90;
+	float pi2 = CV_PI / 2;
+	for (int l = 0; l<numLines; l++)
 	{
-		cout << "Video capturing has been started ..." << endl;
-
-		for (;;)
-		{
-			capture >> frame;
-			//frame = imread("lena.jpg");
-			if (frame.empty())
-				break;
-
-			
-			if (faces.size())
-			{
-				faces[0].x += rectLast.x;
-				faces[0].x -= 10;
-				if (faces[0].x < 0)
-					faces[0].x = 0;
-
-				if (faces[0].x > 400)
-					rectLast.x = faces[0].x;;
-				rectLast.x = faces[0].x;
-
-				faces[0].y += rectLast.y;
-				faces[0].y -= 10;
-				if (faces[0].y < 0)
-					faces[0].y = 0;
-				rectLast.y = faces[0].y;
-
-				faces[0].width += 20;
-				if (faces[0].width > frame.cols)
-					faces[0].width = frame.cols;
-				//rectLast.width = faces[0].width;
-
-				faces[0].height += 20;
-				if (faces[0].height > frame.rows)
-					faces[0].height = frame.rows;
-				//rectLast.height = faces[0].height;
-
-				
-
-				Mat frame1(frame, faces[0]);
-				detectAndDraw(frame1, cascade, nestedCascade, scale, tryflip);
-			}
-			else
-			{
-				rectLast.x = 0;
-				rectLast.y = 0;
-				Mat frame1 = frame.clone();
-				detectAndDraw(frame1, cascade, nestedCascade, scale, tryflip);
-			}
-
-			
-
-			char c = (char)waitKey(10);
-			if (c == 27 || c == 'q' || c == 'Q')
-				break;
+		float theta = lines[l][1];
+		if (abs(theta) < piThresh || abs(theta - pi2) < piThresh)
+			continue;
+		else {
+			angel = theta;
+			break;
 		}
 	}
+
+	//Calculate the rotation angel
+	//The image has to be square,
+	//so that the rotation angel can be calculate right
+	angel = angel<pi2 ? angel : angel - CV_PI;
+	if (angel != pi2) {
+		float angelT = srcImg.rows*tan(angel) / srcImg.cols;
+		angel = atan(angelT);
+	}
+	float angelD = angel * 180 / (float)CV_PI;
+	cout << "the rotation angel to be applied:" << endl << angelD << endl << endl;
+
+	//Rotate the image to recover
+	Mat rotMat = getRotationMatrix2D(center, angelD, 1.0);
+	Mat dstImg = Mat::ones(srcImg.size(), CV_8UC3);
+	warpAffine(srcImg, dstImg, rotMat, srcImg.size(), 1, 0, Scalar(255, 255, 255));
+	imshow("result", dstImg);
+	//imwrite("imageText_D.jpg",dstImg);
+
+	waitKey(0);
 
 	return 0;
-}
-
-
-
-
-void detectAndDraw(Mat& img, CascadeClassifier& cascade,
-	CascadeClassifier& nestedCascade,
-	double scale, bool tryflip)
-{
-	double t = 0;
-	
-	const static Scalar colors[] =
-	{
-		Scalar(255,0,0),
-		Scalar(255,128,0),
-		Scalar(255,255,0),
-		Scalar(0,255,0),
-		Scalar(0,128,255),
-		Scalar(0,255,255),
-		Scalar(0,0,255),
-		Scalar(255,0,255)
-	};
-	Mat gray, smallImg;
-
-	
-		
-
-	cvtColor(img, gray, COLOR_BGR2GRAY);
-	double fx = 1 / scale;
-	resize(gray, smallImg, Size(), fx, fx, INTER_LINEAR);
-	equalizeHist(smallImg, smallImg);//增强对比度
-
-	t = (double)getTickCount();
-	cascade.detectMultiScale(smallImg, faces,
-		1.1, 2, 0
-		//|CASCADE_FIND_BIGGEST_OBJECT
-		//|CASCADE_DO_ROUGH_SEARCH
-		| CASCADE_SCALE_IMAGE,
-		Size(30, 30));
-	
-	t = (double)getTickCount() - t;
-	printf("detection time = %g ms\n", t * 1000 / getTickFrequency());
-
-	for (size_t i = 0; i < faces.size(); i++)
-	{
-		Rect r = faces[i];
-		Mat smallImgROI;
-		vector<Rect> nestedObjects;
-		Point center;
-		Scalar color = colors[i % 8];
-		int radius;
-
-		double aspect_ratio = (double)r.width / r.height;
-		if (0.75 < aspect_ratio && aspect_ratio < 1.3)
-		{
-			center.x = cvRound((r.x + r.width*0.5)*scale);
-			center.y = cvRound((r.y + r.height*0.5)*scale);
-			radius = cvRound((r.width + r.height)*0.25*scale);
-			circle(img, center, radius, color, 3, 8, 0);
-		}
-		else
-			rectangle(img, cvPoint(cvRound(r.x*scale), cvRound(r.y*scale)),
-				cvPoint(cvRound((r.x + r.width - 1)*scale), cvRound((r.y + r.height - 1)*scale)),
-				color, 3, 8, 0);
-		if (nestedCascade.empty())
-			continue;
-		smallImgROI = smallImg(r);
-		nestedCascade.detectMultiScale(smallImgROI, nestedObjects,
-			1.1, 2, 0
-			//|CASCADE_FIND_BIGGEST_OBJECT
-			//|CASCADE_DO_ROUGH_SEARCH
-			//|CASCADE_DO_CANNY_PRUNING
-			| CASCADE_SCALE_IMAGE,
-			Size(30, 30));
-		for (size_t j = 0; j < nestedObjects.size(); j++)
-		{
-			Rect nr = nestedObjects[j];
-			center.x = cvRound((r.x + nr.x + nr.width*0.5)*scale);
-			center.y = cvRound((r.y + nr.y + nr.height*0.5)*scale);
-			radius = cvRound((nr.width + nr.height)*0.25*scale);
-			circle(img, center, radius, color, 3, 8, 0);
-		}
-	}
-	imshow("result", frame);
 }
